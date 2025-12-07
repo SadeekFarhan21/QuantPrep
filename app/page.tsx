@@ -25,17 +25,48 @@ type Problem =
   | { type: 'combination'; n: number; k: number }
   | { type: 'factorial'; n: number };
 
-function getRandomProblem(): Problem {
-  const problemType: ProblemType = Math.random() < 0.5 ? 'combination' : 'factorial';
-
-  if (problemType === 'combination') {
-    const n = Math.floor(Math.random() * 10) + 1; // 1 to 10
-    const k = Math.floor(Math.random() * (n + 1)); // 0 to n
-    return { type: 'combination', n, k };
+function problemToString(p: Problem): string {
+  if (p.type === 'combination') {
+    return `combination_${p.n}_${p.k}`;
   } else {
-    const n = Math.floor(Math.random() * 11); // 0 to 10
-    return { type: 'factorial', n };
+    return `factorial_${p.n}`;
   }
+}
+
+function problemsEqual(p1: Problem, p2: Problem): boolean {
+  if (p1.type !== p2.type) return false;
+  if (p1.type === 'combination' && p2.type === 'combination') {
+    return p1.n === p2.n && p1.k === p2.k;
+  }
+  if (p1.type === 'factorial' && p2.type === 'factorial') {
+    return p1.n === p2.n;
+  }
+  return false;
+}
+
+function getRandomProblem(recentHistory: Problem[] = []): Problem {
+  let newProblem: Problem;
+  let attempts = 0;
+  const maxAttempts = 100; // Prevent infinite loop
+
+  do {
+    const problemType: ProblemType = Math.random() < 0.5 ? 'combination' : 'factorial';
+
+    if (problemType === 'combination') {
+      const n = Math.floor(Math.random() * 10) + 1; // 1 to 10
+      const k = Math.floor(Math.random() * (n + 1)); // 0 to n
+      newProblem = { type: 'combination', n, k };
+    } else {
+      const n = Math.floor(Math.random() * 11); // 0 to 10
+      newProblem = { type: 'factorial', n };
+    }
+
+    attempts++;
+    // If we've tried too many times, just return the problem anyway
+    if (attempts >= maxAttempts) break;
+  } while (recentHistory.some(p => problemsEqual(p, newProblem!)));
+
+  return newProblem!;
 }
 
 export default function Home() {
@@ -46,12 +77,32 @@ export default function Home() {
   const [currentStreak, setCurrentStreak] = useState(0);
   const [highestScore, setHighestScore] = useState(0);
   const [attempts, setAttempts] = useState(0);
+  const [recentProblems, setRecentProblems] = useState<Problem[]>([]);
+  const [globalHighScore, setGlobalHighScore] = useState(0);
+
+  // Load global high score on mount
+  useEffect(() => {
+    fetch('/api/highscore')
+      .then(res => res.json())
+      .then(data => {
+        setGlobalHighScore(data.highScore || 0);
+        setHighestScore(data.highScore || 0);
+      })
+      .catch(err => console.error('Failed to load high score:', err));
+  }, []);
 
   // Generate initial problem only on client side to avoid hydration mismatch
   useEffect(() => {
     if (problem === null) {
-      setProblem(getRandomProblem());
+      const newProblem = getRandomProblem(recentProblems);
+      setProblem(newProblem);
+      // Add to history (keep last 10)
+      setRecentProblems(prev => {
+        const updated = [...prev, newProblem];
+        return updated.slice(-10); // Keep only last 10
+      });
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [problem]);
 
   const correctAnswer = problem
@@ -61,12 +112,18 @@ export default function Home() {
     : null;
 
   const handleNext = useCallback(() => {
-    setProblem(getRandomProblem());
+    const newProblem = getRandomProblem(recentProblems);
+    setProblem(newProblem);
     setAnswer('');
     setFeedback(null);
     setIsCorrect(null);
     setAttempts(0);
-  }, []);
+    // Add to history (keep last 10)
+    setRecentProblems(prev => {
+      const updated = [...prev, newProblem];
+      return updated.slice(-10); // Keep only last 10
+    });
+  }, [recentProblems]);
 
   // Auto-advance to next problem when answer is correct
   useEffect(() => {
@@ -105,6 +162,21 @@ export default function Home() {
       setCurrentStreak(newStreak);
       if (newStreak > highestScore) {
         setHighestScore(newStreak);
+        // Update global high score if this is a new record
+        if (newStreak > globalHighScore) {
+          fetch('/api/highscore', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ score: newStreak }),
+          })
+            .then(res => res.json())
+            .then(data => {
+              if (data.updated) {
+                setGlobalHighScore(data.highScore);
+              }
+            })
+            .catch(err => console.error('Failed to update high score:', err));
+        }
       }
       setIsCorrect(true);
       // Auto-advance will be handled by useEffect (no feedback shown)
@@ -159,7 +231,7 @@ export default function Home() {
               Current: {currentStreak % 1 === 0 ? currentStreak : currentStreak.toFixed(1)}
             </div>
             <div className="px-3 py-2 sm:px-4 sm:py-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg text-purple-700 dark:text-purple-300">
-              Best: {highestScore % 1 === 0 ? highestScore : highestScore.toFixed(1)}
+              Best: {globalHighScore % 1 === 0 ? globalHighScore : globalHighScore.toFixed(1)}
             </div>
           </div>
 
